@@ -169,7 +169,7 @@ def generate_rectangle_roi(landmarks, region_indices, img_shape, aspect=1.0):
 
 
 # --------------------- 主流程 ---------------------
-def process_image(image_path):
+def AU_ROI_detection(image_path):
     # 读取图像
     image = cv2.imread(image_path)
     h, w = image.shape[:2]
@@ -208,7 +208,7 @@ def process_image(image_path):
 
 
 # 执行示例
-roi_masks = process_image("E:\Code For Pytorch\Memo\\assets\examples\\face.png")
+roi_masks = AU_ROI_detection("E:\Code For Pytorch\Memo\\assets\examples\\face.png")
 
 # 示例：访问AU4的ROI掩码
 au4_roi = roi_masks.get("AU4")

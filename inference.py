@@ -1,7 +1,7 @@
 import argparse
 import logging
 import os
-
+import numpy as np
 import torch
 from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
 from diffusers.utils.import_utils import is_xformers_available
@@ -17,6 +17,9 @@ from memo.pipelines.video_pipeline import VideoPipeline
 from memo.utils.audio_utils import extract_audio_emotion_labels, preprocess_audio, resample_audio
 from memo.utils.vision_utils import preprocess_image, tensor_to_video
 
+from memo.pipelines.physics_constraint import physical_model
+from memo.pipelines.physics_constraint import AU_intensity_detection
+from memo.pipelines.AU_ROI_detection_mediapipe import AU_ROI_detection
 
 logger = logging.getLogger("memo")
 logger.setLevel(logging.INFO)
@@ -186,6 +189,11 @@ def main():
     pipeline.to(device=device, dtype=weight_dtype)
 
     video_frames = []
+    current_frame_list = []
+    audio_energy_intensities = []
+    current_au_intensities = AU_intensity_detection(input_image_path)
+    current_au_mask = AU_ROI_detection(input_image_path)
+
     num_clips = audio_emb.shape[0] // config.num_generated_frames_per_clip
     for t in tqdm(range(num_clips), desc="Generating video clips"):
         if len(video_frames) == 0:
@@ -221,6 +229,15 @@ def main():
                 (t + 1) * config.num_generated_frames_per_clip, audio_emb.shape[0]
             )
         ]
+        # 计算当前音频片段的能量强度
+        audio_segment = audio_emb[
+                        t
+                        * config.num_generated_frames_per_clip: min(
+                            (t + 1) * config.num_generated_frames_per_clip, audio_emb.shape[0]
+                        )
+                        ]
+        audio_energy = np.sqrt(np.mean(np.square(audio_segment.cpu().numpy())))
+        audio_energy_intensities.append(audio_energy)
 
         pipeline_output = pipeline(
             ref_image=pixel_values_ref_img,
@@ -235,9 +252,21 @@ def main():
             guidance_scale=config.cfg_scale,
             generator=generator,
             is_new_audio=t == 0,
+            AU_intensities= current_au_intensities,
+            AU_masks=current_au_mask,
         )
 
         video_frames.append(pipeline_output.videos)
+
+        current_frame = pipeline_output.videos.squeeze(0).squeeze(0)
+        current_frame_list.append(current_frame)
+
+        current_au_intensities = AU_intensity_detection(current_frame)
+        current_au_mask = AU_ROI_detection(current_frame)
+
+        next_au_intensities = physical_model(current_au_intensities, audio_energy, t/config.fps)
+        current_au_intensities = next_au_intensities
+
 
     video_frames = torch.cat(video_frames, dim=2)
     video_frames = video_frames.squeeze(0)

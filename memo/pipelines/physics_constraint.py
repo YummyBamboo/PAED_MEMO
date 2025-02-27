@@ -23,11 +23,8 @@ def AU_intensity_detection(image_path):
     # 将 AU 特征和强度转换为 PyTorch 张量
     au_features_tensor = torch.tensor(au_features).unsqueeze(0)  # [1, T, 17]
 
-    # 将张量转换为列表
-    au_features_list = au_features_tensor.tolist()
-    print(au_features_list)
 
-    return au_features_list
+    return au_features_tensor
 
 
 
@@ -47,25 +44,28 @@ def physical_model(au_sequences,force,frame_time):
         delta_au_intensity + au_sequences
 
     '''
-    m = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
-         ]
-    c = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
-         ]
-    k = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
-         ]
-    #x_t is the same size of au_sequences but fill with zeros
-    x_t,damp_ratio,natural_freq,damp_freq = au_sequences.zeros_like
+    num_aus = len(au_sequences)
+    m = [0.01] * num_aus
+    c = [0.01] * num_aus
+    k = [0.01] * num_aus
+
+    # Initialize variables with appropriate shapes
+    x_t = torch.zeros_like(au_sequences)
+    damp_ratio = torch.zeros_like(au_sequences)
+    natural_freq = torch.zeros_like(au_sequences)
+    damp_freq = torch.zeros_like(au_sequences)
 
     t = frame_time
-    for i in range(len(au_sequences)):
-        damp_ratio[i] = c[i] / 2* math.sqrt((m[i] * k[i]))
+    for i in range(num_aus):
+        damp_ratio[i] = c[i] / (2 * math.sqrt(m[i] * k[i]))
         natural_freq[i] = math.sqrt(k[i] / m[i])
-        damp_freq[i] = natural_freq[i] * math.sqrt(1-damp_ratio[i]**2)
+        damp_freq[i] = natural_freq[i] * math.sqrt(1 - damp_ratio[i] ** 2)
 
-        x_t[i] = au_sequences[i] * math.exp(-natural_freq[i]*damp_ratio[i]*t)*math.cos(damp_freq[i]*t) + force/k[i]
-
+        x_t[i] = au_sequences[i] * math.exp(-natural_freq[i] * damp_ratio[i] * t) * math.cos(damp_freq[i] * t) + force / k[i]
+        x_t[i] = x_t[i] - au_sequences[i]
 
     return x_t
+
 
 
 

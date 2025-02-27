@@ -396,6 +396,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         return_dict: bool = True,
         is_new_audio=True,
         update_past_memory=False,
+        AU_intensities: Optional[torch.Tensor] = None,
+        AU_masks: Optional[dict] = None,
     ) -> Union[UNet3DConditionOutput, Tuple]:
         # By default samples have to be AT least a multiple of the overall upsampling factor.
         # The overall upsampling factor is equal to 2 ** (# num of upsampling layears).
@@ -492,6 +494,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     uc_mask=uc_mask,
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
+                    AU_intensities=AU_intensities,
+                    AU_masks=AU_masks,
                 )
             else:
                 sample, res_samples = downsample_block(
@@ -559,6 +563,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     uc_mask=uc_mask,
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
+                    AU_intensities=AU_intensities,
+                    AU_masks=AU_masks,
                 )
             else:
                 sample = upsample_block(
@@ -572,6 +578,18 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     update_past_memory=update_past_memory,
                 )
 
+        #au_guided_grad
+
+        delta_au_intensity = AU_intensities
+        mask = AU_masks
+        L_au = torch.sim(delta_au_intensity**2*mask)
+        loss = L_au
+        grad = torch.autograd.grad(loss,sample,retain_graph=True)[0]
+
+        lambda_weight = 0.3
+        sample = sample - lambda_weight*grad
+
+
         # post-process
         sample = self.conv_norm_out(sample)
         sample = self.conv_act(sample)
@@ -581,3 +599,19 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
             return (sample,)
 
         return UNet3DConditionOutput(sample=sample)
+
+def apply_au_constraints(hidden_states, AU_intensities, AU_masks):
+    # 计算 AU 强度误差
+    delta_au_intensity = AU_intensities
+    mask = AU_masks  # AU 区域掩码
+
+    L_au = torch.sum(delta_au_intensity ** 2 * mask)  # 计算 AU 强度误差
+
+    # 生成修正梯度
+    grad = torch.autograd.grad(L_au, hidden_states, retain_graph=True)[0]
+
+    # 将修正梯度加权注入后续去噪步骤
+    lambda_weight = 0.3  # 权重系数
+    hidden_states = hidden_states - lambda_weight * grad
+
+    return hidden_states

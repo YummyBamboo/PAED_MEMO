@@ -18,8 +18,6 @@ from diffusers.utils import BaseOutput
 from diffusers.utils.torch_utils import randn_tensor
 from einops import rearrange
 
-import memo.models.physics_constraint
-
 
 @dataclass
 class VideoPipelineOutput(BaseOutput):
@@ -157,6 +155,8 @@ class VideoPipeline(DiffusionPipeline):
         output_type: Optional[str] = "tensor",
         return_dict: bool = True,
         is_new_audio: bool = True,
+        AU_intensities: Optional[torch.Tensor] =None,
+        AU_masks:Optional[dict] = None,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: Optional[int] = 1,
     ):
@@ -220,6 +220,8 @@ class VideoPipeline(DiffusionPipeline):
             audio_tensor = torch.cat([uncond_audio_tensor, audio_tensor], dim=0)
             audio_tensor = audio_tensor.to(dtype=self.diffusion_net.dtype, device=self.diffusion_net.device)
 
+
+
         # denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -269,17 +271,17 @@ class VideoPipeline(DiffusionPipeline):
                     audio_emotion=audio_emotion,
                     uc_mask=uc_mask,
                     is_new_audio=is_new_audio,
+                    AU_intensities = AU_intensities,
+                    AU_masks = AU_masks,
                     update_past_memory=i == 0,
                 ).sample
+
 
                 # perform guidance
                 if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-                    # Apply physical constraint here
-                    if i % config.physical_constraint_interval == 0:
-                        latents = apply_physical_constraint(latents, config.physical_constraint_strength)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
