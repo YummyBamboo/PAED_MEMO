@@ -8,7 +8,7 @@ def AU_intensity_detection(image_path):
     detected_facial_attributes = libreface.get_facial_attributes_image(
     image_path,
         temp_dir="../temp",
-        device="cuda")
+        device="cpu")
 
 
 # 提取 detected_aus 和 au_intensities
@@ -21,16 +21,18 @@ def AU_intensity_detection(image_path):
         au_features.append(intensity)
 
     # 将 AU 特征和强度转换为 PyTorch 张量
-    au_features_tensor = torch.tensor(au_features).unsqueeze(0)  # [1, T, 17]
-
+    au_features_tensor = torch.tensor(au_features).unsqueeze(0)
+    au_features_tensor = au_features_tensor.to('cuda')
 
     return au_features_tensor
 
 
 
-def physical_model(au_sequences,force,frame_time):
+
+
+def physical_model(au_sequences, force, frame_time):
     # damped harmonic system
-    '''
+        '''
 
     Args:
         au_sequences: the au_intensity
@@ -43,29 +45,24 @@ def physical_model(au_sequences,force,frame_time):
     Returns:
         delta_au_intensity + au_sequences
 
-    '''
-    num_aus = len(au_sequences)
-    m = [0.01] * num_aus
-    c = [0.01] * num_aus
-    k = [0.01] * num_aus
-
-    # Initialize variables with appropriate shapes
-    x_t = torch.zeros_like(au_sequences)
-    damp_ratio = torch.zeros_like(au_sequences)
-    natural_freq = torch.zeros_like(au_sequences)
-    damp_freq = torch.zeros_like(au_sequences)
-
-    t = frame_time
-    for i in range(num_aus):
-        damp_ratio[i] = c[i] / (2 * math.sqrt(m[i] * k[i]))
-        natural_freq[i] = math.sqrt(k[i] / m[i])
-        damp_freq[i] = natural_freq[i] * math.sqrt(1 - damp_ratio[i] ** 2)
-
-        x_t[i] = au_sequences[i] * math.exp(-natural_freq[i] * damp_ratio[i] * t) * math.cos(damp_freq[i] * t) + force / k[i]
-        x_t[i] = x_t[i] - au_sequences[i]
-
-    return x_t
+        '''
 
 
+        au_sequences.squeeze()
+        num_aus = len(au_sequences)
+        # 改为全张量操作（需调整参数定义）
+        m = torch.tensor([0.01] * num_aus, device=au_sequences.device)
+        c = torch.tensor([0.01] * num_aus, device=au_sequences.device)
+        k = torch.tensor([0.01] * num_aus, device=au_sequences.device)
 
+        # 向量化计算（移除循环）
+        damp_ratio = c / (2 * torch.sqrt(m * k))
+        natural_freq = torch.sqrt(k / m)
+        damp_freq = natural_freq * torch.sqrt(1 - damp_ratio ** 2)
 
+        t = frame_time
+        decay = torch.exp(-natural_freq * damp_ratio * t)
+        oscillation = torch.cos(damp_freq * t)
+
+        x_t = au_sequences * decay * oscillation + force / k
+        return x_t - au_sequences

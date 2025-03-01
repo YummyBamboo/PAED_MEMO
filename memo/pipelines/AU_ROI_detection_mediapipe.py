@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from scipy.spatial import ConvexHull
+import torch
 
 # 初始化MediaPipe面部网格模型
 mp_face_mesh = mp.solutions.face_mesh
@@ -9,7 +10,9 @@ face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=True,
     max_num_faces=1,
     refine_landmarks=True,
-    min_detection_confidence=0.5)
+    min_detection_confidence=0.5,
+
+)
 
 # --------------------- MediaPipe 468关键点映射表 ---------------------
 # 根据LibreFace论文《Facial Action Unit Detection With Hybrid Representation Learning》调整
@@ -199,7 +202,7 @@ def AU_ROI_detection(image_path):
                 roi = generate_rectangle_roi(landmarks, config["indices"], image.shape, config["aspect_ratio"])
 
             # 存储ROI掩码到字典
-            roi_masks[au] = roi
+            roi_masks[au] = torch.from_numpy(roi).to('cuda')
 
         except Exception as e:
             print(f"Error processing {au}: {str(e)}")
@@ -207,12 +210,4 @@ def AU_ROI_detection(image_path):
     return roi_masks
 
 
-# 执行示例
-roi_masks = AU_ROI_detection("E:\Code For Pytorch\Memo\\assets\examples\\face.png")
 
-# 示例：访问AU4的ROI掩码
-au4_roi = roi_masks.get("AU4")
-if au4_roi is not None:
-    cv2.imshow("AU4 ROI", au4_roi)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()

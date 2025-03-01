@@ -3,11 +3,13 @@ import logging
 import os
 import numpy as np
 import torch
+import torchvision
 from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
 from diffusers.utils.import_utils import is_xformers_available
 from omegaconf import OmegaConf
 from packaging import version
 from tqdm import tqdm
+import tempfile
 
 from memo.models.audio_proj import AudioProjModel
 from memo.models.image_proj import ImageProjModel
@@ -190,7 +192,6 @@ def main():
 
     video_frames = []
     current_frame_list = []
-    audio_energy_intensities = []
     current_au_intensities = AU_intensity_detection(input_image_path)
     current_au_mask = AU_ROI_detection(input_image_path)
 
@@ -237,7 +238,11 @@ def main():
                         )
                         ]
         audio_energy = np.sqrt(np.mean(np.square(audio_segment.cpu().numpy())))
-        audio_energy_intensities.append(audio_energy)
+
+
+        start_idx = t * config.num_generated_frames_per_clip
+        end_idx = min((t + 1) * config.num_generated_frames_per_clip, audio_emb.shape[0])
+        actual_frames = end_idx - start_idx
 
         pipeline_output = pipeline(
             ref_image=pixel_values_ref_img,
@@ -247,7 +252,7 @@ def main():
             face_emb=face_emb,
             width=img_size[0],
             height=img_size[1],
-            video_length=config.num_generated_frames_per_clip,
+            video_length=actual_frames,
             num_inference_steps=config.inference_steps,
             guidance_scale=config.cfg_scale,
             generator=generator,
@@ -257,16 +262,44 @@ def main():
         )
 
         video_frames.append(pipeline_output.videos)
+        print(pipeline_output.videos.shape)
 
-        current_frame = pipeline_output.videos.squeeze(0).squeeze(0)
-        current_frame_list.append(current_frame)
 
-        current_au_intensities = AU_intensity_detection(current_frame)
-        current_au_mask = AU_ROI_detection(current_frame)
+        # 遍历当前片段的所有帧
+        for frame_in_clip in range(actual_frames):
+            # 获取当前帧（使用片段内索引）
+            current_frame = pipeline_output.videos[0, :, frame_in_clip]
+            current_frame_list.append(current_frame)
 
-        next_au_intensities = physical_model(current_au_intensities, audio_energy, t/config.fps)
-        current_au_intensities = next_au_intensities
+            # 保存临时文件（用于后续处理）
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                if current_frame.dim() == 3:
+                    current_frame = current_frame.unsqueeze(0)
 
+                torchvision.utils.save_image(
+                    current_frame,
+                    tmp.name,
+                    nrow=1,
+                    normalize=False,
+                    value_range=(0, 255),
+                    format='PNG'
+                )
+            current_au_intensities = AU_intensity_detection(tmp.name)
+            current_au_mask = AU_ROI_detection(tmp.name)
+
+            # 计算准确时间戳（累计帧数）
+            total_frames = t * config.num_generated_frames_per_clip + frame_in_clip
+            frame_time = total_frames / config.fps
+
+
+
+            # 更新物理模型（每帧更新）
+            next_au_intensities = physical_model(
+                current_au_intensities,
+                audio_energy,
+                frame_time
+            )
+            current_au_intensities = next_au_intensities
 
     video_frames = torch.cat(video_frames, dim=2)
     video_frames = video_frames.squeeze(0)

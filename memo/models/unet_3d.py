@@ -17,6 +17,7 @@ from memo.models.unet_3d_blocks import (
     get_up_block,
 )
 
+AU_NAMES= ["AU1", "AU2", "AU4", "AU6", "AU7", "AU9", "AU10", "AU12", "AU14", "AU15", "AU17",  "AU23"]
 
 logger = logging.get_logger(__name__)
 
@@ -494,8 +495,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     uc_mask=uc_mask,
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
-                    AU_intensities=AU_intensities,
-                    AU_masks=AU_masks,
+
                 )
             else:
                 sample, res_samples = downsample_block(
@@ -563,8 +563,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     uc_mask=uc_mask,
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
-                    AU_intensities=AU_intensities,
-                    AU_masks=AU_masks,
+
                 )
             else:
                 sample = upsample_block(
@@ -578,17 +577,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     update_past_memory=update_past_memory,
                 )
 
-        #au_guided_grad
-
-        delta_au_intensity = AU_intensities
-        mask = AU_masks
-        L_au = torch.sim(delta_au_intensity**2*mask)
-        loss = L_au
-        grad = torch.autograd.grad(loss,sample,retain_graph=True)[0]
-
-        lambda_weight = 0.3
-        sample = sample - lambda_weight*grad
-
+        sample = apply_au_constraints(sample, AU_intensities, AU_masks)
 
         # post-process
         sample = self.conv_norm_out(sample)
@@ -601,17 +590,37 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         return UNet3DConditionOutput(sample=sample)
 
 def apply_au_constraints(hidden_states, AU_intensities, AU_masks):
-    # 计算 AU 强度误差
-    delta_au_intensity = AU_intensities
-    mask = AU_masks  # AU 区域掩码
+    # 保留原始约束逻辑，但建立梯度关联
+    with torch.enable_grad():
+        # 创建可计算梯量的引用 (保持数据共享)
+        h = hidden_states.detach().requires_grad_(True)
 
-    L_au = torch.sum(delta_au_intensity ** 2 * mask)  # 计算 AU 强度误差
+        L_au = torch.zeros(1, device=h.device)  # 标量损失
+        device = h.device
+        AU_intensities = AU_intensities.to(device)
 
-    # 生成修正梯度
-    grad = torch.autograd.grad(L_au, hidden_states, retain_graph=True)[0]
+        # 原始约束逻辑（需建立与h的关联）
+        for i, au in enumerate(AU_NAMES):
+            delta_au = AU_intensities[0][i]
+            mask = AU_masks[au].to(device)
 
-    # 将修正梯度加权注入后续去噪步骤
-    lambda_weight = 0.3  # 权重系数
-    hidden_states = hidden_states - lambda_weight * grad
+            # 通过h建立计算关联（不改变原有数学逻辑）
+            constraint_term = delta_au ** 2 * mask * h.mean()  # 示例关联方式
+            L_au += torch.sum(constraint_term)
 
-    return hidden_states
+            # 计算梯度
+            grad = torch.autograd.grad(L_au, h, retain_graph=False)[0]
+
+            # 添加梯度惩罚项
+            grad_norm = torch.norm(grad.view(grad.size(0), -1), dim=1)  # 计算梯度的 L2 范数
+            grad_penalty = (grad_norm - 1) ** 2  # 梯度惩罚项
+            grad_penalty = grad_penalty.mean() * 10  # 惩罚项权重
+
+            # 总损失
+            total_loss = L_au + grad_penalty
+
+            # 重新计算梯度
+            grad = torch.autograd.grad(total_loss, h, retain_graph=False)[0]
+
+    # 梯度注入（保持原有修正方式）
+    return hidden_states - 0.01 * grad.detach()

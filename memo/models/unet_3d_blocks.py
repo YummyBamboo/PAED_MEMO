@@ -10,6 +10,9 @@ from memo.models.resnet import Downsample3D, ResnetBlock3D, Upsample3D
 from memo.models.transformer_3d import Transformer3DModel
 
 
+
+
+
 def create_custom_forward(module, return_dict=None):
     def custom_forward(*inputs):
         if return_dict is not None:
@@ -506,8 +509,7 @@ class CrossAttnDownBlock3D(nn.Module):
         uc_mask=None,
         is_new_audio=True,
         update_past_memory=False,
-        AU_intensities:Optional[torch.Tensor] = None,
-        AU_masks:Optional[dict]=None,
+
     ):
         output_states = ()
 
@@ -568,11 +570,6 @@ class CrossAttnDownBlock3D(nn.Module):
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
                 )
-
-            #add au module
-            if AU_intensities is not None and AU_masks is not None:
-                # 使用 AU 强度和空间掩码
-                hidden_states = apply_au_constraints(hidden_states, AU_intensities, AU_masks)
 
             output_states += (hidden_states,)
 
@@ -842,9 +839,7 @@ class CrossAttnUpBlock3D(nn.Module):
         uc_mask=None,
         is_new_audio=True,
         update_past_memory=False,
-        AU_intensities: Optional[torch.Tensor] = None,  # 新增 AU 强度参数
-        AU_masks: Optional[dict] = None,  # 新增 AU 空间掩码参数
-    ):
+   ):
         for i, (resnet, attn, audio_module, motion_module) in enumerate(
             zip(self.resnets, self.attentions, self.audio_modules, self.motion_modules)
         ):
@@ -908,10 +903,6 @@ class CrossAttnUpBlock3D(nn.Module):
                     update_past_memory=update_past_memory,
                 )
 
-            #add au module
-            if AU_intensities is not None and AU_masks is not None:
-                # 使用 AU 强度和空间掩码
-                hidden_states = apply_au_constraints(hidden_states, AU_intensities, AU_masks)
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
@@ -1037,18 +1028,6 @@ class UpBlock3D(nn.Module):
 
         return hidden_states
 
-def apply_au_constraints(hidden_states, AU_intensities, AU_masks):
-    # 计算 AU 强度误差
-    delta_au_intensity = AU_intensities
-    mask = AU_masks  # AU 区域掩码
 
-    L_au = torch.sum(delta_au_intensity ** 2 * mask)  # 计算 AU 强度误差
 
-    # 生成修正梯度
-    grad = torch.autograd.grad(L_au, hidden_states, retain_graph=True)[0]
 
-    # 将修正梯度加权注入后续去噪步骤
-    lambda_weight = 0.3  # 权重系数
-    hidden_states = hidden_states - lambda_weight * grad
-
-    return hidden_states
