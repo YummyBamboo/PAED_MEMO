@@ -307,6 +307,8 @@ class UNetMidBlock3DCrossAttn(nn.Module):
         uc_mask=None,
         is_new_audio=True,
         update_past_memory=False,
+        AU_intensities=None,
+        AU_masks=None,
     ):
         hidden_states = self.resnets[0](hidden_states, temb)
         for i, (attn, resnet, audio_module, motion_module) in enumerate(
@@ -337,6 +339,8 @@ class UNetMidBlock3DCrossAttn(nn.Module):
                 ref_img_feature,
                 encoder_hidden_states=encoder_hidden_states,
                 uc_mask=uc_mask,
+                AU_intensities=AU_intensities,
+                AU_masks=AU_masks,
                 return_dict=False,
             )
             if audio_module is not None:
@@ -509,6 +513,8 @@ class CrossAttnDownBlock3D(nn.Module):
         uc_mask=None,
         is_new_audio=True,
         update_past_memory=False,
+        AU_intensities=None,
+        AU_masks=None,
 
     ):
         output_states = ()
@@ -547,6 +553,8 @@ class CrossAttnDownBlock3D(nn.Module):
                 ref_img_feature,
                 encoder_hidden_states=encoder_hidden_states,
                 uc_mask=uc_mask,
+                AU_intensities=AU_intensities,
+                AU_masks=AU_masks,
                 return_dict=False,
             )
 
@@ -839,6 +847,8 @@ class CrossAttnUpBlock3D(nn.Module):
         uc_mask=None,
         is_new_audio=True,
         update_past_memory=False,
+        AU_intensities=None,
+        AU_masks=None,
    ):
         for i, (resnet, attn, audio_module, motion_module) in enumerate(
             zip(self.resnets, self.attentions, self.audio_modules, self.motion_modules)
@@ -879,6 +889,8 @@ class CrossAttnUpBlock3D(nn.Module):
                 ref_img_feature,
                 encoder_hidden_states=encoder_hidden_states,
                 uc_mask=uc_mask,
+                AU_intensities=AU_intensities,
+                AU_masks=AU_masks,
                 return_dict=False,
             )
 

@@ -398,7 +398,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         is_new_audio=True,
         update_past_memory=False,
         AU_intensities: Optional[torch.Tensor] = None,
-        AU_masks: Optional[dict] = None,
+        AU_masks: Optional[torch.Tensor] = None,
     ) -> Union[UNet3DConditionOutput, Tuple]:
         # By default samples have to be AT least a multiple of the overall upsampling factor.
         # The overall upsampling factor is equal to 2 ** (# num of upsampling layears).
@@ -495,6 +495,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     uc_mask=uc_mask,
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
+                    AU_intensities=AU_intensities,
+                    AU_masks=AU_masks,
 
                 )
             else:
@@ -505,6 +507,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
+                    AU_intensities=AU_intensities,
+                    AU_masks=AU_masks,
                 )
 
             down_block_res_samples += res_samples
@@ -532,6 +536,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
             uc_mask=uc_mask,
             is_new_audio=is_new_audio,
             update_past_memory=update_past_memory,
+            AU_intensities=AU_intensities,
+            AU_masks=AU_masks,
         )
 
         if mid_block_additional_residual is not None:
@@ -563,6 +569,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     uc_mask=uc_mask,
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
+                    AU_intensities=AU_intensities,
+                    AU_masks=AU_masks,
 
                 )
             else:
@@ -575,9 +583,11 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     is_new_audio=is_new_audio,
                     update_past_memory=update_past_memory,
+                    AU_intensities=AU_intensities,
+                    AU_masks=AU_masks,
                 )
 
-        sample = apply_au_constraints(sample, AU_intensities, AU_masks)
+
 
         # post-process
         sample = self.conv_norm_out(sample)
@@ -589,38 +599,3 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
 
         return UNet3DConditionOutput(sample=sample)
 
-def apply_au_constraints(hidden_states, AU_intensities, AU_masks):
-    # 保留原始约束逻辑，但建立梯度关联
-    with torch.enable_grad():
-        # 创建可计算梯量的引用 (保持数据共享)
-        h = hidden_states.detach().requires_grad_(True)
-
-        L_au = torch.zeros(1, device=h.device)  # 标量损失
-        device = h.device
-        AU_intensities = AU_intensities.to(device)
-
-        # 原始约束逻辑（需建立与h的关联）
-        for i, au in enumerate(AU_NAMES):
-            delta_au = AU_intensities[0][i]
-            mask = AU_masks[au].to(device)
-
-            # 通过h建立计算关联（不改变原有数学逻辑）
-            constraint_term = delta_au ** 2 * mask * h.mean()  # 示例关联方式
-            L_au += torch.sum(constraint_term)
-
-            # 计算梯度
-            grad = torch.autograd.grad(L_au, h, retain_graph=False)[0]
-
-            # 添加梯度惩罚项
-            grad_norm = torch.norm(grad.view(grad.size(0), -1), dim=1)  # 计算梯度的 L2 范数
-            grad_penalty = (grad_norm - 1) ** 2  # 梯度惩罚项
-            grad_penalty = grad_penalty.mean() * 10  # 惩罚项权重
-
-            # 总损失
-            total_loss = L_au + grad_penalty
-
-            # 重新计算梯度
-            grad = torch.autograd.grad(total_loss, h, retain_graph=False)[0]
-
-    # 梯度注入（保持原有修正方式）
-    return hidden_states - 0.01 * grad.detach()

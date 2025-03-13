@@ -40,7 +40,7 @@ python inference.py --config configs/inference.yaml --input_image <IMAGE_PATH> -
 For example:
 
 ```bash
-python inference.py --config configs/inference.yaml --input_image assets/examples/dicaprio.jpg --input_audio assets/examples/speech_full.wav --output_dir outputs
+python inference.py --config configs/inference.yaml --input_image assets/examples/dicaprio.jpg --input_audio assets/examples/speech_10.wav --output_dir outputs
 ```
 
 > We tested the code on H100 and RTX 4090 GPUs using CUDA 12. Under the default settings (fps=30, inference_steps=20), the inference time is around 1 second per frame on H100 and 2 seconds per frame on RTX 4090. We welcome community contributions to improve the inference speed or add more features.

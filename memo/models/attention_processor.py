@@ -9,6 +9,7 @@ from diffusers.utils.import_utils import is_torch_npu_available, is_xformers_ava
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from torch import nn
 
+AU_NAMES= ["AU1", "AU2", "AU4", "AU6", "AU7", "AU9", "AU10", "AU12", "AU14", "AU15", "AU17",  "AU23"]
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -530,10 +531,13 @@ class Attention(nn.Module):
         return tensor
 
     def get_attention_scores(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        attention_mask: torch.Tensor = None,
+            self,
+            query: torch.Tensor,
+            key: torch.Tensor,
+            attention_mask: torch.Tensor = None,
+            AU_masks=None,
+            AU_intensities=None,
+            timestep=None,  # 添加timestep参数来动态调整注意力权重
     ) -> torch.Tensor:
         r"""
         Compute the attention scores.
@@ -542,6 +546,9 @@ class Attention(nn.Module):
             query (`torch.Tensor`): The query tensor.
             key (`torch.Tensor`): The key tensor.
             attention_mask (`torch.Tensor`, *optional*): The attention mask to use. If `None`, no mask is applied.
+            AU_masks: 面部动作单元的掩码，tensor形式 [B, H, W, num_aus]
+            AU_intensities: 面部动作单元的强度，tensor形式 [B, num_aus]
+            timestep: 当前去噪步骤，用于动态调整注意力权重
 
         Returns:
             `torch.Tensor`: The attention probabilities/scores.
@@ -573,6 +580,67 @@ class Attention(nn.Module):
         )
         del baddbmm_input
 
+        # 应用AU掩码和强度来调整注意力分数
+        if AU_intensities is not None and AU_masks is not None:
+            # 确保AU_masks和AU_intensities是tensor
+            if isinstance(AU_masks, torch.Tensor) and isinstance(AU_intensities, torch.Tensor):
+                B, heads, query_len, key_len = attention_scores.shape
+
+                # 假设key_len是图像特征的序列长度，可以是H*W
+                H = int(math.sqrt(key_len))  # 假设key_len = H*W，且H=W
+                W = H
+
+                # 训练阶段的AU影响系数
+                # 在训练阶段，我们可以使用一个较小的固定系数
+                au_influence_factor = 0.05
+
+                # 处理AU_intensities，确保形状正确 [B, num_aus]
+                if AU_intensities.dim() == 1:
+                    AU_intensities = AU_intensities.unsqueeze(0)  # [1, num_aus]
+
+                # 确保AU_masks形状正确 [B, H, W, num_aus]
+                if AU_masks.dim() == 3:  # [H, W, num_aus]
+                    AU_masks = AU_masks.unsqueeze(0).expand(B, -1, -1, -1)  # [B, H, W, num_aus]
+
+                # 获取AU数量
+                num_aus = AU_intensities.shape[1]
+
+                # 初始化注意力调整因子
+                attention_adjustment = torch.zeros_like(attention_scores)
+
+                # 对每个AU进行处理
+                for au_idx in range(num_aus):
+                    # 获取当前AU的强度 [B]
+                    au_intensity = AU_intensities[:, au_idx].view(B, 1, 1, 1)
+
+                    # 获取当前AU的掩码 [B, H, W]
+                    au_mask = AU_masks[:, :, :, au_idx]
+
+                    # 将掩码调整为注意力图的大小
+                    if au_mask.shape[1] != H or au_mask.shape[2] != W:
+                        au_mask = F.interpolate(
+                            au_mask.unsqueeze(1),  # [B, 1, H, W]
+                            size=(H, W),
+                            mode='bilinear',
+                            align_corners=False
+                        ).squeeze(1)  # [B, H, W]
+
+                    # 将掩码展平为序列形式 [B, H*W]
+                    au_mask_flat = au_mask.reshape(B, 1, 1, H * W)
+
+                    # 扩展掩码到注意力分数的形状 [B, heads, query_len, key_len]
+                    au_mask_expanded = au_mask_flat.expand(-1, heads, query_len, -1)
+
+                    # 根据AU强度和掩码调整注意力分数
+                    # 使用sigmoid确保调整是平滑的
+                    adjustment = torch.sigmoid(au_intensity) * au_mask_expanded * au_influence_factor
+
+                    # 累积调整
+                    attention_adjustment += adjustment
+
+                # 应用累积的调整到注意力分数
+                attention_scores = attention_scores * (1.0 + attention_adjustment)
+
         if self.upcast_softmax:
             attention_scores = attention_scores.float()
 
@@ -580,7 +648,6 @@ class Attention(nn.Module):
         del attention_scores
 
         attention_probs = attention_probs.to(dtype)
-
         return attention_probs
 
     def prepare_attention_mask(
@@ -727,8 +794,11 @@ class AttnProcessor:
         encoder_hidden_states: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         temb: Optional[torch.Tensor] = None,
+        AU_masks=None,
+        AU_intensities=None,
         *args,
         **kwargs,
+
     ) -> torch.Tensor:
         if len(args) > 0 or kwargs.get("scale", None) is not None:
             deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
@@ -767,7 +837,7 @@ class AttnProcessor:
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
 
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        attention_probs = attn.get_attention_scores(query, key, attention_mask, AU_masks=AU_masks, AU_intensities=AU_intensities)
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
 
@@ -795,10 +865,15 @@ class MemoryLinearAttnProcessor:
     def __init__(self):
         self.memory = {"KV": None, "Z": None}
         self.decay = 0.9
+        # 添加噪声检测和抑制参数
+        self.noise_threshold = 0.05    # 噪声阈值
+        self.memory_decay_rate = 0.85  # 记忆衰减率
+        self.noise_history = []        # 用于跟踪噪声水平
 
     def reset_memory_state(self):
         """Reset memory to the initial state."""
         self.memory = {"KV": None, "Z": None}
+        self.noise_history = []
 
     def __call__(
         self,
@@ -810,6 +885,7 @@ class MemoryLinearAttnProcessor:
         temb: Optional[torch.Tensor] = None,
         is_new_audio: bool = True,
         update_past_memory: bool = False,
+        timestep=None,  # 添加timestep参数
         *args,
         **kwargs,
     ) -> torch.Tensor:
@@ -994,6 +1070,8 @@ class CustomDiffusionAttnProcessor(nn.Module):
         hidden_states: torch.Tensor,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        AU_masks=None,
+        AU_intensities=None,
     ) -> torch.Tensor:
         batch_size, sequence_length, _ = hidden_states.shape
         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
@@ -1029,7 +1107,7 @@ class CustomDiffusionAttnProcessor(nn.Module):
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
 
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        attention_probs = attn.get_attention_scores(query, key, attention_mask, AU_masks=AU_masks, AU_intensities=AU_intensities)
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
 
@@ -1059,6 +1137,8 @@ class AttnAddedKVProcessor:
         hidden_states: torch.Tensor,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        AU_masks=None,
+        AU_intensities=None,
         *args,
         **kwargs,
     ) -> torch.Tensor:
@@ -1099,7 +1179,7 @@ class AttnAddedKVProcessor:
             key = encoder_hidden_states_key_proj
             value = encoder_hidden_states_value_proj
 
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        attention_probs = attn.get_attention_scores(query, key, attention_mask,AU_intensities=AU_intensities,AU_masks=AU_masks)
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
 
@@ -1203,6 +1283,8 @@ class JointAttnProcessor2_0:
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
+        AU_masks=None,
+        AU_intensities=None,
         *args,
         **kwargs,
     ) -> torch.FloatTensor:
@@ -2072,6 +2154,8 @@ class SlicedAttnProcessor:
         hidden_states: torch.Tensor,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        AU_masks=None,
+        AU_intensities=None,
     ) -> torch.Tensor:
         residual = hidden_states
 
@@ -2118,7 +2202,7 @@ class SlicedAttnProcessor:
             key_slice = key[start_idx:end_idx]
             attn_mask_slice = attention_mask[start_idx:end_idx] if attention_mask is not None else None
 
-            attn_slice = attn.get_attention_scores(query_slice, key_slice, attn_mask_slice)
+            attn_slice = attn.get_attention_scores(query_slice, key_slice, attn_mask_slice,AU_masks=AU_masks,AU_intensities=AU_intensities)
 
             attn_slice = torch.bmm(attn_slice, value[start_idx:end_idx])
 
@@ -2162,6 +2246,8 @@ class SlicedAttnAddedKVProcessor:
         encoder_hidden_states: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         temb: Optional[torch.Tensor] = None,
+        AU_masks=None,
+        AU_intensities=None,
     ) -> torch.Tensor:
         residual = hidden_states
 
@@ -2217,7 +2303,7 @@ class SlicedAttnAddedKVProcessor:
             key_slice = key[start_idx:end_idx]
             attn_mask_slice = attention_mask[start_idx:end_idx] if attention_mask is not None else None
 
-            attn_slice = attn.get_attention_scores(query_slice, key_slice, attn_mask_slice)
+            attn_slice = attn.get_attention_scores(query_slice, key_slice, attn_mask_slice, AU_masks=AU_masks, AU_intensities=AU_intensities)
 
             attn_slice = torch.bmm(attn_slice, value[start_idx:end_idx])
 

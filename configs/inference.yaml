@@ -3,7 +3,7 @@ num_generated_frames_per_clip: 16
 fps: 30
 num_init_past_frames: 16
 num_past_frames: 16
-inference_steps: 20
+inference_steps: 30
 cfg_scale: 3.5
 weight_dtype: bf16
 enable_xformers_memory_efficient_attention: true

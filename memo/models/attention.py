@@ -349,6 +349,7 @@ class TemporalBasicTransformerBlock(nn.Module):
                 dropout=dropout,
                 bias=attention_bias,
                 upcast_attention=upcast_attention,
+
             )
             nn.init.zeros_(self.attn_temp.to_out[0].weight.data)
             self.norm_temp = AdaLayerNorm(dim, num_embeds_ada_norm) if self.use_ada_layer_norm else nn.LayerNorm(dim)
@@ -363,6 +364,8 @@ class TemporalBasicTransformerBlock(nn.Module):
         cross_attention_kwargs: Dict[str, Any] = None,
         video_length=None,
         uc_mask=None,
+        AU_masks=None,
+        AU_intensities=None,
     ):
         norm_hidden_states = self.norm1(hidden_states)
 
@@ -425,7 +428,8 @@ class TemporalBasicTransformerBlock(nn.Module):
             norm_hidden_states = (
                 self.norm_temp(hidden_states, timestep) if self.use_ada_layer_norm else self.norm_temp(hidden_states)
             )
-            hidden_states = self.attn_temp(norm_hidden_states) + hidden_states
+            hidden_states = self.attn_temp(norm_hidden_states,AU_intensity= AU_intensities,
+                AU_masks=AU_masks) + hidden_states
             hidden_states = rearrange(hidden_states, "(b d) f c -> (b f) d c", d=d)
 
         return hidden_states
@@ -589,6 +593,8 @@ class JointAudioTemporalBasicTransformerBlock(nn.Module):
         encoder_hidden_states=None,
         attention_mask=None,
         emotion=None,
+        AU_masks=None,
+        AU_intensities=None,
     ):
         norm_hidden_states = (
             self.norm1(hidden_states, emotion) if self.use_ada_layer_norm else self.norm1(hidden_states)
@@ -617,6 +623,8 @@ class JointAudioTemporalBasicTransformerBlock(nn.Module):
         joint_hidden_states, joint_encoder_hidden_states = self.attn2(
             norm_hidden_states,
             norm_encoder_hidden_states,
+            AU_intensities=AU_intensities,
+            AU_masks=AU_masks,
         )
 
         hidden_states = joint_hidden_states + hidden_states

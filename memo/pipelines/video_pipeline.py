@@ -271,8 +271,6 @@ class VideoPipeline(DiffusionPipeline):
                     audio_emotion=audio_emotion,
                     uc_mask=uc_mask,
                     is_new_audio=is_new_audio,
-                    AU_intensities = AU_intensities,
-                    AU_masks = AU_masks,
                     update_past_memory=i == 0,
                 ).sample
 

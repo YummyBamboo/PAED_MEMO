@@ -7,6 +7,10 @@ import random
 import shutil
 import time
 import warnings
+import tempfile
+from typing import Dict, List, Optional, Tuple, Union
+
+
 
 import accelerate
 import diffusers
@@ -31,6 +35,12 @@ from memo.models.audio_proj import AudioProjModel
 from memo.models.image_proj import ImageProjModel
 from memo.models.unet_2d_condition import UNet2DConditionModel
 from memo.models.unet_3d import UNet3DConditionModel
+
+from memo.pipelines.physics_constraint import AU_intensity_detection
+from memo.pipelines.AU_ROI_detection_mediapipe import AU_ROI_detection
+from memo.pipelines.physics_constraint import physical_model
+from PIL import Image
+from torchvision.transforms import transforms
 
 
 warnings.filterwarnings("ignore")
@@ -100,6 +110,8 @@ class MEMOModel(nn.Module):
         audio_emotion: torch.Tensor = None,
         uncond_img_fwd: bool = False,
         uncond_audio_fwd: bool = False,
+        AU_intensity: Optional[torch.Tensor] = None,
+        AU_masks: Optional[torch.Tensor] = None,
     ):
         face_emb = self.image_proj(face_emb)
 
@@ -139,6 +151,8 @@ class MEMOModel(nn.Module):
             encoder_hidden_states=face_emb,
             audio_embedding=audio_emb,
             audio_emotion=audio_emotion,
+            AU_intensities=AU_intensity,
+            AU_masks=AU_masks,
         ).sample
 
         return model_pred
@@ -468,6 +482,10 @@ def main():
 
                     noise = torch.randn_like(latents)
 
+                    au_intensities = batch["au_intensities"].to(accelerator.device, dtype=weight_dtype
+                                            )
+                    au_masks = batch["au_masks"].to(accelerator.device, dtype=weight_dtype)
+
                     # Sample a random timestep for each video
                     def get_timesteps(bsz=None):
                         bsz = bsz or latents.shape[0]
@@ -515,6 +533,8 @@ def main():
                     audio_emotion=batch["audio_emotion"],
                     uncond_img_fwd=uncond_img_fwd,
                     uncond_audio_fwd=uncond_audio_fwd,
+                    AU_intensities=au_intensities,
+                    AU_masks=au_masks,
                 )
 
                 # Follow: Section 5 of https://arxiv.org/abs/2206.00364.

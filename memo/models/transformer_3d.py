@@ -131,6 +131,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
         timestep=None,
         emotion=None,
         uc_mask=None,
+        AU_masks=None,
+        AU_intensities=None,
         return_dict: bool = True,
     ):
         # Input
@@ -177,6 +179,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                         None,  # cross_attention_kwargs
                         video_length,
                         uc_mask,
+                        AU_intensities=AU_intensities,
+                        AU_masks=AU_masks,
                     )
                 elif isinstance(block, JointAudioTemporalBasicTransformerBlock):
                     (
@@ -188,6 +192,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                         encoder_hidden_states,
                         attention_mask,
                         emotion,
+                        AU_intensities = AU_intensities,
+                        AU_masks = AU_masks,
                     )
                 else:
                     hidden_states = torch.utils.checkpoint.checkpoint(
@@ -197,6 +203,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                         timestep,
                         attention_mask,
                         video_length,
+                        AU_intensities = AU_intensities,
+                        AU_masks = AU_masks,
                     )
             else:
                 if isinstance(block, TemporalBasicTransformerBlock):
@@ -207,6 +215,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                         timestep=timestep,
                         video_length=video_length,
                         uc_mask=uc_mask,
+                        AU_intensities = AU_intensities,
+                        AU_masks = AU_masks,
                     )
                 elif isinstance(block, JointAudioTemporalBasicTransformerBlock):
                     hidden_states, encoder_hidden_states = block(
@@ -214,6 +224,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                         encoder_hidden_states=encoder_hidden_states,  # shape [2, 20, 640]
                         attention_mask=attention_mask,
                         emotion=emotion,
+                        AU_intensities = AU_intensities,
+                        AU_masks = AU_masks,
                     )
                 else:
                     hidden_states = block(
@@ -222,6 +234,8 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
                         attention_mask=attention_mask,
                         timestep=timestep,
                         video_length=video_length,
+                        AU_intensities = AU_intensities,
+                        AU_masks = AU_masks,
                     )
 
         # Output
